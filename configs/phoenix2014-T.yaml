@@ -1,0 +1,5 @@
+dataset_root: /Users/gufran/Developer/data/phoenix2014T
+precomputed_ft_dir: /home/ahmedubc/projects/aip-lsigal/ahmedubc/MM_SLT/features/phoenix14-T
+sp_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/sp/clip-vit-large-patch14_feat_Phoenix14T
+phm_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/mo/mae_feat_Phoenix14T
+language: German

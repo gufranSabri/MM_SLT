@@ -1,0 +1,11 @@
+pip install torch
+pip install pyyaml
+pip install numpy
+pip install tqdm
+pip install nltk
+pip install transformers==4.55.0
+pip install trl==0.20.0
+pip install peft==0.17.0
+pip install wandb==0.16.0
+pip install rouge_score
+pip install sacrebleu
