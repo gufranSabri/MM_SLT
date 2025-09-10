@@ -1,172 +1,214 @@
 import os
-import cv2
-import sys
 import glob
-import time
+import cv2
 import torch
-import warnings
-sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
-warnings.simplefilter(action='ignore', category=FutureWarning)
-
+import pickle
 import numpy as np
-import torch.utils.data as data
-from utils import video_augmentation
+from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
+import torch.nn.functional as F
+from utils.video_augmentation import *
 
-sys.path.append("..")
-global kernel_sizes 
+class PrecomputedFeatureDataset(Dataset):
+    def __init__(
+        self, 
+        feature_dir,
+        sp_dir,
+        pose_dir,
+        mo_dir,
+        phm_dir,
+        dataset="phoenix2014-T",
+        mode="train",
+        include_sp=True,
+        include_pose=True,
+        include_mo=True,
+        logger=None
+    ):
+        self.feature_dir = feature_dir
+        self.sp_dir = sp_dir
+        self.phm_dir = phm_dir
+        self.pose_dir = pose_dir
+        self.mo_dir = mo_dir
 
-class BaseFeeder(data.Dataset):
-    def __init__(self, prefix, dataset='phoenix2014', drop_ratio=1, num_gloss=-1, mode="train", transform_mode=True,
-                 datatype="lmdb", frame_interval=1, image_scale=1.0, kernel_size=1, input_size=224):
         self.mode = mode
-        self.ng = num_gloss
-        self.prefix = prefix
-        self.data_type = datatype
-        self.dataset = dataset
-        self.input_size = input_size
-        global kernel_sizes 
-        kernel_sizes = kernel_size
-        self.frame_interval = frame_interval # not implemented for read_features()
-        self.image_scale = image_scale # not implemented for read_features()
-        self.feat_prefix = f"{prefix}/fullFrame-256x256px/{mode}"
-        self.transform_mode = "train" if transform_mode else "test"
-        self.inputs_list = np.load(f"./preprocess/{dataset}/{mode}_info.npy", allow_pickle=True).item()
+        self.include_sp = include_sp
+        self.include_pose = include_pose
+        self.include_mo = include_mo
 
-        del self.inputs_list["prefix"]
-        self.labels = [self.inputs_list[i]["original_info"].split("|")[-1] for i in range(len(self.inputs_list))]
+        assert self.include_sp or self.include_pose, "At least one feature must be included."
+        if logger:
+            logger(f"FEATURES: include_sp: {include_sp}, include_pose: {include_pose}, include_mo: {include_mo}")
 
-        # python main.py --device 2 --dataset phoenix2014 --loss-weights Slow=0.25 Fast=0.25 --work-dir ./work_dir/phoenix2014/
-        
-        if "phoenix" in self.dataset:
-            indices_to_remove = []
-            for key in self.inputs_list:
-                if key == 'prefix': continue
-                item = self.inputs_list[key]["original_info"].split("|")[1]
-                item = item[:item.index("*")]
-                path = os.path.join(self.feat_prefix, item)
+        self.sp_suffix = "_s2wrapping"
+        self.mo_suffix = "_overlap-8"
 
-                if not os.path.exists(path):
-                    print(path)
-                    indices_to_remove.append(key)
+        self.files = [
+            fname
+            for fname in os.listdir(feature_dir)
+            # if fname.endswith(".pkl")
+        ]
+        if not self.files:
+            raise ValueError(f"No .pkl files found in directory: {feature_dir}")
 
-            for key in indices_to_remove:
-                print(f"Removing {key} from {self.mode}", "=============================")
-                del self.inputs_list[key]
+        self.anno_path = f"./preprocess/{dataset}/{mode}_info_ml.npy"
+        self.prep_annots(np.load(self.anno_path, allow_pickle=True).item())
 
-        inp = []
-        for key in self.inputs_list:
-            if key == 'prefix': continue
-            inp.append(self.inputs_list[key])
+        with open(os.path.join(self.pose_dir, f"{dataset}.{mode}"), "rb") as f:
+            self.pose_dict = pickle.load(f)
 
-        self.inputs_list = inp
         self.data_aug = self.transform()
+                
+
+    def transform(self):
+        if self.transform_mode == "train":
+            print("Apply training transform.")
+            return Compose([
+                RandomCrop(self.input_size),
+                RandomHorizontalFlip(0.5),
+                Resize(self.image_scale),
+                ToTensor(),
+                TemporalRescale(0.2, self.frame_interval),
+            ])
+        else:
+            print("Apply testing transform.")
+            return Compose([
+                CenterCrop(self.input_size),
+                Resize(self.image_scale),
+                ToTensor(),
+            ])
 
 
-    def __getitem__(self, idx):
-        input_data, label, fi = self.read_video(idx)
-        input_data = self.normalize(input_data)
-        return input_data, label, self.inputs_list[idx]['original_info']
+    def prep_annots(self, annots):
+        del annots["prefix"]
+
+        langs = ["en", "fr", "es"]
+        self.translations, self.text, self.gloss = {}, {}, {}
+        for i in range(len(annots)):
+            self.translations[annots[i]["fileid"]] = {lang: annots[i][f"{lang}_text"] for lang in langs if f"{lang}_text" in annots[i]}
+            self.text[annots[i]["fileid"]] = annots[i]["text"] if "text" in annots[i] else ""
+            self.gloss[annots[i]["fileid"]] = annots[i]["gloss"] if "gloss" in annots[i] else ""
+
+        to_remove = []
+        for key in self.translations.keys():
+            if key not in self.files:
+                to_remove.append(key)
+
+        for key in to_remove:
+            del self.translations[key]
+
+    def __len__(self):
+        return len(self.files)
 
     def read_video(self, index):
         fi = self.inputs_list[index]
         if 'phoenix' in self.dataset:
-            img_folder = os.path.join(self.prefix, "fullFrame-256x256px/" , fi['folder'])  
-        elif self.dataset == 'CSL':
-            img_folder = os.path.join(self.prefix, "features/fullFrame-256x256px/" + fi['folder'] + "/*.jpg")
+            img_folder = os.path.join(self.feature_dir, self.files[index])
         elif self.dataset == 'CSL-Daily':
             img_folder = os.path.join(self.prefix, fi['folder'])
 
         img_list = sorted(glob.glob(img_folder))
         img_list = img_list[int(torch.randint(0, self.frame_interval, [1]))::self.frame_interval]
-        label = self.labels[index]
-
         if self.dataset != 'CSL-Daily':
-            return [cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB) for img_path in img_list], label, fi
+            return [cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB) for img_path in img_list]
         else:
-            return [cv2.cvtColor(cv2.resize(cv2.imread(img_path)[40:, ...], (256, 256)), cv2.COLOR_BGR2RGB) for img_path in img_list], label, fi
+            return [cv2.cvtColor(cv2.resize(cv2.imread(img_path)[40:, ...], (256, 256)), cv2.COLOR_BGR2RGB) for img_path in img_list]
 
-    def read_features(self, index):
-        fi = self.inputs_list[index]
-        data = np.load(f"./features/{self.mode}/{fi['fileid']}_features.npy", allow_pickle=True).item()
-        return data['features'], data['label']
-    
-    def normalize(self, video, file_id=None):
-        video = self.data_aug(video)
+    def normalize(self, video, label, file_id=None):
+        video, label = self.data_aug(video, label, file_id)
         if isinstance(video, list):
             video = torch.stack(video, dim=0)  # Shape: (T, C, H, W)
         video = ((video.float() / 255.) - 0.45) / 0.225
         
-        return video
+        return video, label
+    
+    def __getitem__(self, idx):
+        mo_ft_path = os.path.join(self.mo_dir, self.files[idx] + f"{self.mo_suffix}.npy")
 
-    def transform(self):
-        if self.transform_mode == "train":
-            return video_augmentation.Compose([
-                video_augmentation.RandomCrop(self.input_size),
-                video_augmentation.RandomHorizontalFlip(0.5),
-                video_augmentation.Resize(self.image_scale),
-                video_augmentation.ToTensor(),
-                video_augmentation.TemporalRescale(0.2, self.frame_interval),
-            ])
-        else:
-            return video_augmentation.Compose([
-                video_augmentation.CenterCrop(self.input_size),
-                video_augmentation.Resize(self.image_scale),
-                video_augmentation.ToTensor(),
-            ])
+        imgs = self.read_video(idx)
+        imgs = self.normalize(imgs)
 
+        sp_ft, pose_ft, mo_ft = None, None, None
+
+        pose_ft = self.pose_dict[f"{self.mode}/{self.files[idx].replace('.pkl', '')}"]["keypoint"] if self.include_pose else None
+        mo_ft = torch.tensor(np.load(mo_ft_path), dtype=torch.float32) if self.include_mo else None
+
+        # pad sp_ft to make sure length is divisble by 4
+        if self.include_sp:
+            pad_length = (4 - sp_ft.shape[0] % 4) % 4
+            sp_ft = F.pad(sp_ft, (0, 0, 0, pad_length), "constant", 0)
+
+        # pad pose_ft to make sure length is divisble by 4
+        if self.include_pose:
+            A,B,C = pose_ft.shape
+            if A > 400: pose_ft = pose_ft[np.linspace(0, A - 1, 400, dtype=int)]
+            pose_ft = pose_ft.reshape(pose_ft.shape[0], B * C)
+
+            pad_length = (4 - pose_ft.shape[0] % 4) % 4
+            pose_ft = F.pad(pose_ft, (0, 0, 0, pad_length), "constant", 0)
+
+            pose_ft = pose_ft.reshape(-1, B, C)
+
+        if self.include_mo:
+            pad_length = (4 - mo_ft.shape[0] % 4) % 4
+            mo_ft = F.pad(mo_ft, (0, 0, 0, pad_length), "constant", 0)
+
+
+        gloss = self.gloss[self.files[idx].replace(".pkl", "")]
+        text = self.text[self.files[idx].replace(".pkl", "")]
+
+        icl_text = "\n".join([
+            f'{self.translations[self.files[idx].replace(".pkl", "")]["en"]}={text}',
+            f'{self.translations[self.files[idx].replace(".pkl", "")]["fr"]}={text}',
+            f'{self.translations[self.files[idx].replace(".pkl", "")]["es"]}={text}',
+        ])
+
+        return sp_ft, pose_ft, mo_ft, gloss, text, icl_text
+    
     @staticmethod
     def collate_fn(batch):
-        batch = [item for item in sorted(batch, key=lambda x: len(x[0]), reverse=True)]
-        video, label, info = list(zip(*batch))
+        sp_ft, pose_ft, mo_ft, glosses, texts, icl_text = zip(*batch)  # unpack the batch
+
+        sp_lengths = torch.tensor([t.shape[0] for t in sp_ft], dtype=torch.long) if sp_ft[0] is not None else None
+        pose_lengths = torch.tensor([t.shape[0] for t in pose_ft], dtype=torch.long) if pose_ft[0] is not None else None
+        mo_lengths = torch.tensor([t.shape[0] for t in mo_ft], dtype=torch.long) if mo_ft[0] is not None else None
+
+        padded_sp_ft = pad_sequence(sp_ft, batch_first=True) if sp_ft[0] is not None else None
+
+        padded_pose_ft = None
+        if pose_ft[0] is not None:
+            pose_ft_r = [pft.reshape(pft.shape[0], -1) for pft in pose_ft]
+            padded_pose_ft = pad_sequence(pose_ft_r, batch_first=True)
+            B, T, KC = padded_pose_ft.shape
+            padded_pose_ft = padded_pose_ft.reshape(B, T, KC//3, 3).permute(0, 3, 1, 2)
         
-        left_pad = 0
-        last_stride = 1
-        total_stride = 1
-        global kernel_sizes 
-        for layer_idx, ks in enumerate(kernel_sizes):
-            if ks[0] == 'K':
-                left_pad = left_pad * last_stride 
-                left_pad += int((int(ks[1])-1)/2)
-            elif ks[0] == 'P':
-                last_stride = int(ks[1])
-                total_stride = total_stride * last_stride
+        padded_mo_ft = pad_sequence(mo_ft, batch_first=True) if mo_ft[0] is not None else None
 
-        if len(video[0].shape) > 3:
-            max_len = len(video[0])
-            video_length = torch.LongTensor([np.ceil(len(vid) / total_stride) * total_stride + 2*left_pad for vid in video])
-            right_pad = int(np.ceil(max_len / total_stride)) * total_stride - max_len + left_pad
-            max_len = max_len + left_pad + right_pad
-            padded_video = [torch.cat(
-                (
-                    vid[0][None].expand(left_pad, -1, -1, -1),
-                    vid,
-                    vid[-1][None].expand(max_len - len(vid) - left_pad, -1, -1, -1),
-                )
-                , dim=0)
-                for vid in video]
-            padded_video = torch.stack(padded_video)
-        else:
-            max_len = len(video[0])
-            video_length = torch.LongTensor([len(vid) for vid in video])
-            padded_video = [torch.cat(
-                (
-                    vid,
-                    vid[-1][None].expand(max_len - len(vid), -1),
-                )
-                , dim=0)
-                for vid in video]
-            padded_video = torch.stack(padded_video).permute(0, 2, 1)
+        return padded_sp_ft, padded_pose_ft, padded_mo_ft, glosses, texts, icl_text, sp_lengths, pose_lengths, mo_lengths
 
-        return padded_video, video_length, label, info
 
-    def __len__(self):
-        return len(self.inputs_list) - 1
+if __name__ == "__main__":
+    from torch.utils.data import DataLoader
+    
+    mode="dev"
+    dataset = PrecomputedFeatureDataset(
+        f"/home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/phoenix2014T/fullFrame-256x256px/{mode}",
+        f"/home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/sp/clip-vit-large-patch14_feat_Phoenix14T/{mode}",
+        f"/home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/pose/",
+        f"/home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/pomo/mae_feat_Phoenix14T/{mode}",
+        f"/home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/posp/clip-vit-large-patch14_feat_Phoenix14T/{mode}",
+        mode=mode
+    )
+    dataloader = DataLoader(dataset, batch_size=2, shuffle=True, collate_fn=dataset.collate_fn)
 
-    def record_time(self):
-        self.cur_time = time.time()
-        return self.cur_time
+    for sp_features, pose_features, mo_features, glosses, texts, icl_text, sp_lengths, pose_lengths, mo_lengths in dataloader:
+        print(sp_features.shape)
+        # print(pose_features.shape)
+        # print(mo_features.shape)
+        # print(glosses)
+        # print(texts)
+        # print(icl_text[0])
+        # print(sp_lengths)
+        # print(pose_lengths)
+        # print(mo_lengths)
 
-    def split_time(self):
-        split_time = time.time() - self.cur_time
-        self.record_time()
-        return split_time
+        # break

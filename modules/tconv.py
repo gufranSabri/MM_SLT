@@ -10,8 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import copy
 
-
-
 class TemporalConv(nn.Module):
     def __init__(self, input_size, hidden_size, conv_type=2, use_bn=False, num_classes=-1):
         super(TemporalConv, self).__init__()
@@ -28,21 +26,9 @@ class TemporalConv(nn.Module):
         elif self.conv_type == 2:
             self.kernel_size = ['K5', "P2", 'K5', "P2"]
         elif self.conv_type == 3:
-            self.kernel_size = ['K5', 'K5', "P2"]
-        elif self.conv_type == 4:
-            self.kernel_size = ['K5', 'K5']
-        elif self.conv_type == 5:
-            self.kernel_size = ['K5', "P2", 'K5']
-        elif self.conv_type == 6:
-            self.kernel_size = ["P2", 'K5', 'K5']
-        elif self.conv_type == 7:
-            self.kernel_size = ["P2", 'K5', "P2", 'K5']
-        elif self.conv_type == 8:
-            self.kernel_size = ["P2", "P2", 'K5', 'K5']
-        elif self.conv_type == 9:
-            self.kernel_size = ["K5", "K5", "P2"]
-        elif self.conv_type == 10:
-            self.kernel_size = ["K5", "K5"]
+            self.kernel_size = ['K5', "P2", 'K5', "P2", "K5", "P2"]
+        elif self.conv_type == -2:
+            self.kernel_size = ['K5', "P2", 'K5', "P2"]
 
         modules = []
         for layer_idx, ks in enumerate(self.kernel_size):

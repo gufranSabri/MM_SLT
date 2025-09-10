@@ -16,10 +16,72 @@ class Compose(object):
     def __init__(self, transforms):
         self.transforms = transforms
 
-    def __call__(self, image):
+    def __call__(self, image, label, file_info=None):
         for t in self.transforms:
-            image = t(image)
-        return image
+            if file_info is not None and isinstance(t, WERAugment):
+                image, label = t(image, label, file_info)
+            else:
+                image = t(image)
+        return image, label
+
+
+class WERAugment(object):
+    def __init__(self, boundary_path):
+        self.boundary_dict = np.load(boundary_path, allow_pickle=True).item()
+        self.K = 3
+
+    def __call__(self, video, label, file_info):
+        ind = np.arange(len(video)).tolist()
+        if file_info not in self.boundary_dict.keys():
+            return video, label
+        binfo = copy.deepcopy(self.boundary_dict[file_info])
+        binfo = [0] + binfo + [len(video)]
+        k = np.random.randint(min(self.K, len(label) - 1))
+        for i in range(k):
+            ind, label, binfo = self.one_operation(ind, label, binfo)
+        ret_video = [video[i] for i in ind]
+        return ret_video, label
+
+    def one_operation(self, *inputs):
+        prob = np.random.random()
+        if prob < 0.3:
+            return self.delete(*inputs)
+        elif 0.3 <= prob < 0.7:
+            return self.substitute(*inputs)
+        else:
+            return self.insert(*inputs)
+
+    @staticmethod
+    def delete(ind, label, binfo):
+        del_wd = np.random.randint(len(label))
+        ind = ind[:binfo[del_wd]] + ind[binfo[del_wd + 1]:]
+        duration = binfo[del_wd + 1] - binfo[del_wd]
+        del label[del_wd]
+        binfo = [i for i in binfo[:del_wd]] + [i - duration for i in binfo[del_wd + 1:]]
+        return ind, label, binfo
+
+    @staticmethod
+    def insert(ind, label, binfo):
+        ins_wd = np.random.randint(len(label))
+        ins_pos = np.random.choice(binfo)
+        ins_lab_pos = binfo.index(ins_pos)
+
+        ind = ind[:ins_pos] + ind[binfo[ins_wd]:binfo[ins_wd + 1]] + ind[ins_pos:]
+        duration = binfo[ins_wd + 1] - binfo[ins_wd]
+        label = label[:ins_lab_pos] + [label[ins_wd]] + label[ins_lab_pos:]
+        binfo = binfo[:ins_lab_pos] + [binfo[ins_lab_pos - 1] + duration] + [i + duration for i in binfo[ins_lab_pos:]]
+        return ind, label, binfo
+
+    @staticmethod
+    def substitute(ind, label, binfo):
+        sub_wd = np.random.randint(len(label))
+        tar_wd = np.random.randint(len(label))
+
+        ind = ind[:binfo[tar_wd]] + ind[binfo[sub_wd]:binfo[sub_wd + 1]] + ind[binfo[tar_wd + 1]:]
+        label[tar_wd] = label[sub_wd]
+        delta_duration = binfo[sub_wd + 1] - binfo[sub_wd] - (binfo[tar_wd + 1] - binfo[tar_wd])
+        binfo = binfo[:tar_wd + 1] + [i + delta_duration for i in binfo[tar_wd + 1:]]
+        return ind, label, binfo
 
 
 class ToTensor(object):

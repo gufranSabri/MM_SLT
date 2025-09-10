@@ -11,7 +11,8 @@ class Logger:
         self.file_path = file_path
         self.file_mode = file_mode
 
-    def __call__(self, message):
-        with open(self.file_path, self.file_mode) as f:
-            f.write(f"{message}\n")
-            print(message)
+    def __call__(self, message, is_main=True):
+        if is_main:
+            with open(self.file_path, self.file_mode) as f:
+                f.write(f"{message}\n")
+                print(message)
