@@ -26,6 +26,8 @@ from datetime import datetime
 from utils.evaluate import evaluate_results
 
 
+
+
 main_logger, pred_logger = None, None
 
 # util functions ========================================================================================
@@ -47,16 +49,6 @@ def import_class(name):
 def init_fn(worker_id):
     np.random.seed(np.random.get_state()[1][0] + worker_id)
 
-def gather_embeddings(image_embeds, text_embeds, world_size): 
-    if world_size == 1: 
-        return image_embeds, text_embeds
-
-    gathered_image = [torch.zeros_like(image_embeds) for _ in range(world_size)] 
-    gathered_text = [torch.zeros_like(text_embeds) for _ in range(world_size)] 
-    dist.all_gather(gathered_image, image_embeds)
-    dist.all_gather(gathered_text, text_embeds)
-
-    return torch.cat(gathered_image, dim=0), torch.cat(gathered_text, dim=0)
 # util functions ========================================================================================
 
 
@@ -127,7 +119,7 @@ def setup_data(arg, world_size, rank, is_main):
             batch_size=batch_size,
             drop_last=train_flag,
             num_workers=0,
-            collate_fn=ft_dataset.collate_fn,
+            collate_fn=dataset.collate_fn,
             worker_init_fn=init_fn,
             sampler=sampler[mode]
         )
@@ -160,11 +152,6 @@ def setup_model_comps(arg, rank, world_size, data_loader, steps_info, is_main, W
         if is_main: main_logger("Using score-dependent learning rate scheduler.")
 
     else:
-        # scheduler = get_cosine_schedule_with_warmup(
-        #     optimizer=optimizer,
-        #     num_warmup_steps=len(data_loader["train"])*5,
-        #     num_training_steps=steps_info["train"],
-        # )
         scheduler = get_linear_schedule_with_warmup(
             optimizer=optimizer,
             num_warmup_steps=0,
@@ -198,7 +185,8 @@ def main(rank, world_size, arg, WORK_DIR_PATH):
         main_logger(model)
 
     train_loader = data_loader["train"]
-    val_loader = data_loader["test"]
+    val_loader = data_loader["dev"]
+    test_loader = data_loader["test"]
 
     warmup, patience = False, arg.patience
     least_loss, best_b4 = 1000, 0
@@ -224,7 +212,9 @@ def main(rank, world_size, arg, WORK_DIR_PATH):
             sp_features, pose_features, mo_features, glosses, texts, icl_text, sp_lengths, pose_lengths, mo_lengths = batch
 
             sp_features = sp_features.to(rank) if sp_features is not None else None
-            pose_features = pose_features.to(rank) if pose_features is not None else None
+            if arg.include_pose:
+                pose_features["keypoint"] = pose_features["keypoint"].to(rank) if pose_features is not None else None
+                pose_features["mask"] = pose_features["mask"].to(rank) if pose_features is not None else None
             mo_features = mo_features.to(rank) if mo_features is not None else None
             sp_lengths = sp_lengths.to(rank) if sp_lengths is not None else None
             pose_lengths = pose_lengths.to(rank) if pose_lengths is not None else None
@@ -261,7 +251,9 @@ def main(rank, world_size, arg, WORK_DIR_PATH):
                 sp_features, pose_features, mo_features, glosses, texts, icl_text, sp_lengths, pose_lengths, mo_lengths = batch
 
                 sp_features = sp_features.to(rank) if sp_features is not None else None
-                pose_features = pose_features.to(rank) if pose_features is not None else None
+                if arg.include_pose:
+                    pose_features["keypoint"] = pose_features["keypoint"].to(rank) if pose_features is not None else None
+                    pose_features["mask"] = pose_features["mask"].to(rank) if pose_features is not None else None
                 mo_features = mo_features.to(rank) if mo_features is not None else None
                 sp_lengths = sp_lengths.to(rank) if sp_lengths is not None else None
                 pose_lengths = pose_lengths.to(rank) if pose_lengths is not None else None
@@ -343,14 +335,17 @@ if __name__ == '__main__':
     with open(f"./configs/{args.dataset}.yaml", 'r') as f:
         args.dataset_info = yaml.load(f, Loader=yaml.FullLoader)
 
-    WORK_DIR_PATH = args.work_dir + '_' + datetime.now().strftime("D%d_H%H_M%M_S%S")
+    WORK_DIR_PATH = args.work_dir # + '_' + datetime.now().strftime("D%d_H%H_M%M_S%S")
     if not WORK_DIR_PATH.endswith('/'): WORK_DIR_PATH = WORK_DIR_PATH + '/'
     os.makedirs(WORK_DIR_PATH, exist_ok=True)
 
-    args.num_warmup_epochs = min(5, args.num_warmup_epochs) if not args.contrastive else args.num_warmup_epochs
+    args.num_warmup_epochs = 0 if not args.contrastive else args.num_warmup_epochs
     assert args.include_sp or args.include_pose or args.include_mo, "At least one modality should be included."
 
-    shutil.copy2(p.config, WORK_DIR_PATH)
+    if args.mode == "train":
+        shutil.copy2(p.config, WORK_DIR_PATH)
+        shutil.copy2(f"./configs/{args.dataset}.yaml", WORK_DIR_PATH)
+        shutil.copy2(f"./modules/pose_encoder/model.py", WORK_DIR_PATH)
 
     world_size = torch.cuda.device_count()
     torch.multiprocessing.spawn(main, args=(world_size, args, WORK_DIR_PATH), nprocs=world_size, join=True)

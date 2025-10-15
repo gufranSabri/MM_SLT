@@ -3,6 +3,7 @@ import torch.nn as nn
 import math
 import numpy as np
 from modules.pose_encoder.vh import VisualHead
+# from vh import VisualHead
 
 
 
@@ -275,33 +276,26 @@ class Recognition(nn.Module):
         self.left_visual_head = VisualHead(**cfg['left_visual_head'])
         self.right_visual_head = VisualHead(**cfg['right_visual_head'])
 
-        self.final_projection = nn.Sequential(
-            nn.Linear(512*4, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024)
-        )
-
     def forward(self, src_input):
         fuse, left_output, right_output, body = self.visual_backbone_keypoint(src_input)
-        body_head = self.body_visual_head(
-            x=body,
-            mask=src_input['mask'],
-        )
         fuse_head = self.fuse_visual_head(
             x=fuse,
             mask=src_input['mask'],
         )
-        left_head = self.left_visual_head(
-            x=left_output,
-            mask=src_input['mask'],
-        )
-        right_head = self.right_visual_head(
-            x=right_output,
-            mask=src_input['mask'],
-        )
+        # body_head = self.body_visual_head(
+        #     x=body,
+        #     mask=src_input['mask'],
+        # )
+        # left_head = self.left_visual_head(
+        #     x=left_output,
+        #     mask=src_input['mask'],
+        # )
+        # right_head = self.right_visual_head(
+        #     x=right_output,
+        #     mask=src_input['mask'],
+        # )
 
-        output = self.final_projection(torch.cat([body_head, fuse_head, left_head, right_head], dim=-1))
-        return output
+        return fuse_head
 
 class PoseEncoder(nn.Module):
     def __init__(self, cfg):
@@ -312,24 +306,27 @@ class PoseEncoder(nn.Module):
     def forward(self, src_input):
         outputs = self.recognition_network(src_input)
         return outputs
-    
+
 
 
 
 if __name__ == "__main__":
     import yaml
 
-    yaml_path = "/Users/gufran/Desktop/temp/phoenix-2014t_s2g.yaml"
+    yaml_path = "/home/ahmedubc/projects/aip-lsigal/ahmedubc/MM_SLT/configs/phoenix-2014t_s2g.yaml"
     with open(yaml_path, 'r') as f:
         cfg = yaml.safe_load(f)["model"]["RecognitionNetwork"]
 
     model = PoseEncoder(cfg)
 
-    w_path = "/Users/gufran/Desktop/temp/best.pth"
-    weights = torch.load(w_path, map_location='cpu')["model"]
+    # w_path = "/Users/gufran/Desktop/temp/best.pth"
+    # weights = torch.load(w_path, map_location='cpu')["model"]
 
-    msg = model.load_state_dict(weights, strict=False)
-
-    x = {'keypoint': torch.randn(4, 3, 126, 133)} # -> [B, C, T, K]
+    # msg = model.load_state_dict(weights, strict=False)
+    
+    mask = torch.rand(4, 1, 31)
+    x = {'keypoint': torch.randn(4, 3, 124, 133), "mask": mask} # -> [B, C, T, K]
 
     outputs = model(x)
+
+    print(outputs.shape)  # [B, T, D]

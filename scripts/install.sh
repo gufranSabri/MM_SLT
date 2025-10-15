@@ -18,4 +18,4 @@ pip install triton
 pip install -U triton
 pip install einops
 pip install seaborn
-# pip install tensorflow
+pip install torch-geometric

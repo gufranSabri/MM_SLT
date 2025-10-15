@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import copy
 
 class TemporalConv(nn.Module):
-    def __init__(self, input_size, hidden_size, conv_type=2, use_bn=False, num_classes=-1):
+    def __init__(self, input_size, hidden_size, conv_type=2, use_bn=False, num_classes=-1, padding="none"):
         super(TemporalConv, self).__init__()
         self.use_bn = use_bn
         self.input_size = input_size
@@ -36,8 +36,10 @@ class TemporalConv(nn.Module):
             if ks[0] == 'P':
                 modules.append(nn.MaxPool1d(kernel_size=int(ks[1]), ceil_mode=False))
             elif ks[0] == 'K':
+                padding = 2 if int(ks[1]) == 5 else 1
+                self.padding = 0 if padding == "none" else padding
                 modules.append(
-                    nn.Conv1d(input_sz, self.hidden_size, kernel_size=int(ks[1]), stride=1, padding=0)
+                    nn.Conv1d(input_sz, self.hidden_size, kernel_size=int(ks[1]), stride=1, padding=self.padding)
                 )
                 modules.append(nn.BatchNorm1d(self.hidden_size))
                 modules.append(nn.ReLU(inplace=True))
@@ -51,9 +53,8 @@ class TemporalConv(nn.Module):
         for ks in self.kernel_size:
             if ks[0] == 'P':
                 feat_len = torch.div(feat_len, 2)
-            else:
+            elif self.padding not in [0]:
                 feat_len -= int(ks[1]) - 1
-                #pass
         return feat_len
 
     def forward(self, frame_feat, lgt):

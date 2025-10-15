@@ -19,6 +19,6 @@ pip install --no-index --upgrade pip
 
 bash ./scripts/install.sh
 
-huggingface-cli login --token hf_token
+huggingface-cli login --token token
 
 python main_ddp.py --work-dir ./work_dir/llama2_7B_m1 --config ./configs/baseline_dom_ddp.yaml

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from modules.pose_encoder.util import PositionalEncoding, MaskedNorm, PositionwiseFeedForward, MLPHead
+# from util import PositionalEncoding, MaskedNorm, PositionwiseFeedForward, MLPHead
 
 
 class VisualHead(torch.nn.Module):

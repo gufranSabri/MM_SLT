@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from modules.tconv import TemporalConv
 from modules.pose_encoder.model import PoseEncoder
+from modules.gating import GatedFusion
 from torch.distributed.nn.functional import all_gather
 from utils.helpers import safe_derangement, clip_loss
 
@@ -77,8 +78,6 @@ class EDM(nn.Module):
             nn.Linear(self.hidden_size, self.llm.config.d_model),
             nn.GELU(),
             nn.Linear(self.llm.config.d_model, self.llm.config.d_model),
-            # nn.GELU(),
-            # nn.Linear(self.llm.config.d_model, self.llm.config.d_model),
         )
         if self.include_pose:
             self.pose_encoder = PoseEncoder(cfg=self.pose_encoder_cfg)
@@ -91,6 +90,13 @@ class EDM(nn.Module):
             for param in self.pose_encoder.parameters():
                 param.requires_grad = False
 
+
+            # self.pose_encoder = nn.Sequential(
+            #     nn.Linear(133*3, 512),
+            #     nn.GELU(),
+            #     nn.Linear(512, self.pose_hidden_size),
+            # )
+
         self.temporal_encoder = TemporalConv(self.hidden_size, self.hidden_size, conv_type=2)
         self.logit_scale = nn.Parameter(torch.tensor(2.6592))
 
@@ -99,27 +105,27 @@ class EDM(nn.Module):
             self.clf_mo = nn.Linear(self.hidden_size, self.num_classes) if self.include_mo else None
             self.clf_pose = nn.Linear(self.hidden_size, self.num_classes) if self.include_pose else None
 
-            self.pre_llm_sp = nn.Sequential(
-                nn.Linear(self.num_classes, self.hidden_size),
-                nn.GELU(),
-                nn.Linear(self.hidden_size, self.hidden_size),
-                nn.GELU(),
-                nn.Linear(self.hidden_size, self.hidden_size),
-            ) if self.include_sp else None
-            self.pre_llm_mo = nn.Sequential(
-                nn.Linear(self.num_classes, self.hidden_size),
-                nn.GELU(),
-                nn.Linear(self.hidden_size, self.hidden_size),
-                nn.GELU(),
-                nn.Linear(self.hidden_size, self.hidden_size),
-            ) if self.include_mo else None
-            self.pre_llm_pose = nn.Sequential(
-                nn.Linear(self.num_classes, self.hidden_size),
-                nn.GELU(),
-                nn.Linear(self.hidden_size, self.hidden_size),
-                nn.GELU(),
-                nn.Linear(self.hidden_size, self.hidden_size),
-            ) if self.include_pose else None
+            # self.pre_llm_sp = nn.Sequential(
+            #     nn.Linear(self.num_classes, self.hidden_size),
+            #     nn.GELU(),
+            #     nn.Linear(self.hidden_size, self.hidden_size),
+            #     nn.GELU(),
+            #     nn.Linear(self.hidden_size, self.hidden_size),
+            # ) if self.include_sp else None
+            # self.pre_llm_mo = nn.Sequential(
+            #     nn.Linear(self.num_classes, self.hidden_size),
+            #     nn.GELU(),
+            #     nn.Linear(self.hidden_size, self.hidden_size),
+            #     nn.GELU(),
+            #     nn.Linear(self.hidden_size, self.hidden_size),
+            # ) if self.include_mo else None
+            # self.pre_llm_pose = nn.Sequential(
+            #     nn.Linear(self.num_classes, self.hidden_size),
+            #     nn.GELU(),
+            #     nn.Linear(self.hidden_size, self.hidden_size),
+            #     nn.GELU(),
+            #     nn.Linear(self.hidden_size, self.hidden_size),
+            # ) if self.include_pose else None
 
             self.ctc_loss = torch.nn.CTCLoss(reduction='none', zero_infinity=False)
 
@@ -199,11 +205,15 @@ class EDM(nn.Module):
             mo_features = self.mo_proj(mo_features)
             
         if self.include_pose:
-            B, C, T, K = pose_features.shape
-            mask = torch.zeros(B, T//4, 1, dtype=torch.bool, device=pose_features.device)
-            pose_features = self.pose_encoder({'keypoint': pose_features.float(), 'mask': mask})
+            pose_features = self.pose_encoder(pose_features)
             pose_lengths = torch.tensor([pose_features.shape[1]]*pose_features.shape[0], dtype=torch.long, device=pose_features.device)
             pose_features = self.pose_proj(pose_features)
+
+            # pose_features = pose_features["keypoint"]
+            # B, C, T, K = pose_features.shape
+            # pose_features = pose_features.permute(0, 2, 1, 3).reshape(B, T, C*K)
+            # pose_features = self.pose_encoder(pose_features)
+            # pose_features = self.pose_proj(pose_features)
 
         slr_loss, mlp_sp, mlp_mo, mlp_pose = 0, 0, 0, 0
         if self.include_ctc:
@@ -234,6 +244,8 @@ class EDM(nn.Module):
         joint_visual, visual_lengths = [], []
         for i in range(bs):
             parts = []
+
+            # parts.append(features[i, :sp_lengths[i]])
 
             if self.include_ctc:
                 if self.include_sp:

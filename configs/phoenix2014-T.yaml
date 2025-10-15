@@ -4,9 +4,11 @@ feature_dir: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/phoenix2014T/f
 
 # sp_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/sp/clip-vit-large-patch14_feat_Phoenix14T
 # sp_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/dino_sp/sp/dinov2-giant-imagenet1k-1-layer_feat_phoenix2014-T
-sp_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/features
+sp_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/features2
 
-mo_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/mo/mae_feat_Phoenix14T
+# mo_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/mo/mae_feat_Phoenix14T
+mo_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/pomo/mae_feat_Phoenix14T
+
 phm_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/spamo/posp/clip-vit-large-patch14_feat_Phoenix14T
 pose_path: /home/ahmedubc/projects/aip-lsigal/ahmedubc/datasets/pose
 

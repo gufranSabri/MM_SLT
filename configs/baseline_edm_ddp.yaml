@@ -1,6 +1,7 @@
 # inits ================================================================================================================================================================================================================== 
 random_seed: 0
 work_dir: /data/ahmed026/MM_SLT/test
+mode: train
 # inits ==================================================================================================================================================================================================================
 
 
@@ -30,10 +31,11 @@ sp_hidden_size: 768 #swin_sign
 # sp_hidden_size: 2048 #ViT
 # sp_hidden_size: 3072 #DinoV2
 
-pose_hidden_size: 1024 #KP
+pose_hidden_size: 512 #KP
 # pose_hidden_size: 2048 #HM
 
 mo_hidden_size: 1024
+# mo_hidden_size: 2048
 # modalities ==================================================================================================================================================================================================================
 
 
@@ -77,8 +79,8 @@ slr: modules.slr.SLRModel
 slr_weights: /Users/gufran/Developer/Projects/AI/MLLM_SLT/ckpt/swinB_SLR.pt
 
 model: llms.edm_ddp.EDM
-# llm: google/flan-t5-xl
-llm: facebook/mbart-large-50-many-to-many-mmt
+llm: google/flan-t5-xl
+# llm: facebook/mbart-large-50-many-to-many-mmt
 
 slr_args:
   c2d_type: swinb_mstcn-3
