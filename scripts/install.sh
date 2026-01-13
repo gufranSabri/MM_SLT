@@ -19,3 +19,8 @@ pip install -U triton
 pip install einops
 pip install seaborn
 pip install torch-geometric
+pip uninstall googletrans -y
+pip install googletrans==4.0.0-rc1
+pip install deep-translator
+pip install rouge_chinese
+pip install tensorflow

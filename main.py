@@ -78,12 +78,15 @@ def setup_work_dir(arg, is_main, WORK_DIR_PATH):
     arg.llm_args["contrastive"] = arg.contrastive
     arg.llm_args["include_ctc"] = arg.include_ctc
     arg.llm_args["gloss_dict"] = np.load(arg.dataset_info['dict_path'], allow_pickle=True).item()
+    arg.llm_args["dataset"] = arg.dataset
+    arg.llm_args["num_heads"] = arg.temporal_args["num_heads"]
+    arg.llm_args["num_layers"] = arg.temporal_args["num_layers"]
     with open(arg.dataset_info["pose_encoder_config_path"], 'r') as f:
         arg.llm_args["pose_encoder_cfg"] = yaml.safe_load(f)["model"]["RecognitionNetwork"]
 
     ft_dataset = import_class(arg.feeder_ft)
     shutil.copy2(inspect.getfile(ft_dataset), WORK_DIR_PATH)
-    shutil.copy2("./main_ddp.py", WORK_DIR_PATH)
+    shutil.copy2("./main_slt.py", WORK_DIR_PATH)
 
     return arg
 
@@ -94,7 +97,7 @@ def setup_data(arg, world_size, rank, is_main):
     elif 'phoenix' in arg.dataset:
         dataset_list = zip(["train", "dev", "test"], [True, False, False]) 
     elif arg.dataset == 'CSL-Daily':
-        dataset_list = zip(["train", "train_eval", "dev", "test"], [True, False, False, False])
+        dataset_list = zip(["train", "dev", "test"], [True, False, False, False])
 
     data_loader, sampler = {}, {}
     ft_dataset = import_class(arg.feeder_ft)
@@ -104,11 +107,11 @@ def setup_data(arg, world_size, rank, is_main):
             os.path.join(arg.dataset_info["sp_path"], mode), 
             arg.dataset_info["pose_path"], 
             os.path.join(arg.dataset_info["mo_path"], mode), 
-            os.path.join(arg.dataset_info["phm_path"], mode), 
             mode=mode,
             include_sp=arg.include_sp,
             include_pose=arg.include_pose,
             include_mo=arg.include_mo,
+            dataset=arg.dataset
         )
         sampler[mode] = DistributedSampler(dataset) if train_flag else None
 
@@ -346,6 +349,7 @@ if __name__ == '__main__':
         shutil.copy2(p.config, WORK_DIR_PATH)
         shutil.copy2(f"./configs/{args.dataset}.yaml", WORK_DIR_PATH)
         shutil.copy2(f"./modules/pose_encoder/model.py", WORK_DIR_PATH)
+        shutil.copy2(f"./modules/sf_temporal.py", WORK_DIR_PATH)
 
     world_size = torch.cuda.device_count()
     torch.multiprocessing.spawn(main, args=(world_size, args, WORK_DIR_PATH), nprocs=world_size, join=True)

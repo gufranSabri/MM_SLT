@@ -17,6 +17,7 @@ device: cuda:0
 feeder: dataset.loader_img.BaseFeeder
 feeder_ft: dataset.loader_ft.PrecomputedFeatureDataset
 
+# dataset: CSL-Daily
 dataset: phoenix2014-T
 # idk ==================================================================================================================================================================================================================
 
@@ -25,9 +26,9 @@ dataset: phoenix2014-T
 # modalities ==================================================================================================================================================================================================================
 include_sp: True
 include_pose: False
-include_mo: False
+include_mo: True
 
-sp_hidden_size: 768 #swin_sign
+sp_hidden_size: 768 #ustm
 # sp_hidden_size: 2048 #ViT
 # sp_hidden_size: 3072 #DinoV2
 
@@ -78,9 +79,14 @@ feeder_args:
 slr: modules.slr.SLRModel
 slr_weights: /Users/gufran/Developer/Projects/AI/MLLM_SLT/ckpt/swinB_SLR.pt
 
-model: llms.edm_ddp.EDM
-llm: google/flan-t5-xl
+model: models.edm_ddp.EDM
+llm: bigscience/mt0-xl
+# llm: google/flan-t5-xl
 # llm: facebook/mbart-large-50-many-to-many-mmt
+
+temporal_args:
+  num_layers: 4
+  num_heads: 4
 
 slr_args:
   c2d_type: swinb_mstcn-3
@@ -90,11 +96,18 @@ slr_args:
   weight_norm: True
 
 llm_args:
+  apply_lora: True
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.1
   llm_hidden_size: 768
-  max_txt_len: 64
+  max_txt_len: 128
   tuning_mode: lora
   prompt: "Translate the given sentence into"
+  # prompt: "What is the translation of this sentence from English to"
+  # prompt: "You are a professional translator. Translate the following sentence into"
+
+  # prompt: "Übersetzen Sie den gegebenen Satz in"
+  # prompt: "Was ist die Übersetzung dieses Satzes von Englisch nach"
+  # prompt: "Du bist ein professioneller Übersetzer. Übersetze den folgenden Satz ins"
 # model params ==================================================================================================================================================================================================================

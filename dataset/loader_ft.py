@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 class PrecomputedFeatureDataset(Dataset):
     def __init__(self, 
-        feature_dir, sp_dir, pose_dir, mo_dir, phm_dir,
+        feature_dir, sp_dir, pose_dir, mo_dir,
         dataset="phoenix2014-T", mode="train",
         include_sp=True, include_pose=True, include_mo=True,
         logger=None
@@ -16,16 +16,18 @@ class PrecomputedFeatureDataset(Dataset):
         self.dataset = dataset
         self.feature_dir = feature_dir
         self.sp_dir = sp_dir
-        self.phm_dir = phm_dir
         self.pose_dir = pose_dir
         self.mo_dir = mo_dir
+
+        if not os.path.exists(self.mo_dir):
+            self.mo_dir = mo_dir.replace("/" + mode, "")
 
         self.mode = mode
         self.include_sp = include_sp
         self.include_pose = include_pose
         self.include_mo = include_mo
 
-        assert self.include_sp or self.include_pose, "At least one feature must be included."
+        assert self.include_sp or self.include_pose or self.include_mo, "At least one feature must be included."
         if logger:
             logger(f"FEATURES: include_sp: {include_sp}, include_pose: {include_pose}, include_mo: {include_mo}")
 
@@ -33,7 +35,7 @@ class PrecomputedFeatureDataset(Dataset):
         self.mo_suffix = "_overlap-8"
 
         self.files = [
-            fname
+            fname.split(".")[0]
             for fname in os.listdir(feature_dir)
         ]
         self.filter_missing()
@@ -59,10 +61,19 @@ class PrecomputedFeatureDataset(Dataset):
         with open(path, "rb") as f:
             self.pose_dict = pickle.load(f)
 
+            if self.dataset == "CSL-Daily":
+                new_pose_dict = {}
+                for key in self.pose_dict.keys():
+                    new_key = f"{phase}/{key}"
+                    new_pose_dict[new_key] = self.pose_dict[key]
+                self.pose_dict = new_pose_dict
+            
+
     def filter_missing(self):
         to_remove = []
         for f in self.files:
-            if not os.path.exists(os.path.join(self.sp_dir, f + ".npy")):
+            # if not os.path.exists(os.path.join(self.sp_dir, f + f"{self.sp_suffix}.npy")):
+            if not os.path.exists(os.path.join(self.sp_dir, f + f".npy")):
                 to_remove.append(f)
 
         for f in to_remove:
@@ -70,14 +81,14 @@ class PrecomputedFeatureDataset(Dataset):
 
 
     def prep_annots(self, annots):
-        del annots["prefix"]
+        if "prefix" in annots: del annots["prefix"]
 
         langs = ["en", "fr", "es"]
         self.translations, self.text, self.gloss = {}, {}, {}
         for i in range(len(annots)):
             self.translations[annots[i]["fileid"]] = {lang: annots[i][f"{lang}_text"] for lang in langs if f"{lang}_text" in annots[i]}
             self.text[annots[i]["fileid"]] = annots[i]["text"] if "text" in annots[i] else ""
-            self.gloss[annots[i]["fileid"]] = annots[i]["gloss"] if "gloss" in annots[i] else ""
+            self.gloss[annots[i]["fileid"]] = annots[i]["gloss"] if "gloss" in annots[i] else annots[i]["label"]
 
         to_remove = []
         for key in self.translations.keys():
@@ -91,8 +102,9 @@ class PrecomputedFeatureDataset(Dataset):
         return len(self.files)
 
     def __getitem__(self, idx):
+        # sp_ft_path = os.path.join(self.sp_dir, self.files[idx] + f"{self.sp_suffix}.npy")
         sp_ft_path = os.path.join(self.sp_dir, self.files[idx] + f".npy")
-        mo_ft_path = os.path.join(self.mo_dir, self.files[idx] + f"{self.mo_suffix}.npy")
+        mo_ft_path = os.path.join(self.mo_dir, self.files[idx] + f".npy")
 
         sp_ft, pose_ft, mo_ft = None, None, None
 
@@ -103,10 +115,15 @@ class PrecomputedFeatureDataset(Dataset):
         gloss = self.gloss[self.files[idx].replace(".pkl", "")]
         text = self.text[self.files[idx].replace(".pkl", "")]
 
+        # icl_text = "\n".join([
+        #     f'{self.translations[self.files[idx].replace(".pkl", "")]["en"]}={text}',
+        #     f'{self.translations[self.files[idx].replace(".pkl", "")]["fr"]}={text}',
+        #     f'{self.translations[self.files[idx].replace(".pkl", "")]["es"]}={text}',
+        # ])
         icl_text = "\n".join([
-            f'{self.translations[self.files[idx].replace(".pkl", "")]["en"]}={text}',
             f'{self.translations[self.files[idx].replace(".pkl", "")]["fr"]}={text}',
             f'{self.translations[self.files[idx].replace(".pkl", "")]["es"]}={text}',
+            f'{self.translations[self.files[idx].replace(".pkl", "")]["en"]}={text}',
         ])
 
         return sp_ft, pose_ft, mo_ft, gloss, text, icl_text
@@ -124,7 +141,6 @@ class PrecomputedFeatureDataset(Dataset):
 
     def augment_preprocess_inputs(self, is_train, keypoints=None):
         if is_train == 'train':
-            # TODO keypoint augment
             keypoints[:, 0, :, :] /= self.w
             keypoints[:, 1, :, :] = self.h - keypoints[:, 1, :, :]
             keypoints[:, 1, :, :] /= self.h
@@ -137,12 +153,6 @@ class PrecomputedFeatureDataset(Dataset):
             keypoints[:, 1, :, :] /= self.h
             keypoints[:, :2, :, :] = (keypoints[:, :2, :, :] - 0.5) / 0.5
         return keypoints
-
-    # def get_selected_index(self, vlen):
-    #     # Simply return all frame indices without changing T
-    #     frame_index = np.arange(vlen)
-    #     valid_len = vlen
-    #     return frame_index, valid_len
 
     def get_selected_index(self, vlen):
         if self.tmin == 1 and self.tmax == 1:

@@ -1,9 +1,9 @@
-
 import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from modules.tconv import TemporalConv
+from modules.ff import IMTM_CMTM
 from modules.pose_encoder.model import PoseEncoder
 from modules.gating import GatedFusion
 from torch.distributed.nn.functional import all_gather
@@ -12,9 +12,12 @@ from utils.helpers import safe_derangement, clip_loss
 
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoTokenizer, T5ForConditionalGeneration, T5Config
-from transformers import MBartForConditionalGeneration, MBart50TokenizerFast#, MBartConfig
+from transformers import MBartForConditionalGeneration, MBart50TokenizerFast, AutoModelForSeq2SeqLM
 from peft import LoraConfig, get_peft_model, TaskType
 
+import torch
+import torch.nn as nn
+import math
 
 class EDM(nn.Module):
     def __init__(self, arg):
@@ -40,9 +43,14 @@ class EDM(nn.Module):
         self.hidden_size = arg["llm_hidden_size"]
         self.include_ctc = arg["include_ctc"]
         self.llm_name = arg["llm"]
+        self.dataset = arg["dataset"]
+        self.bart_lang_heads = {"CSL-Daily": "zh_CN", "phoenix2014-T": "de_DE"}
 
+        self.gloss_dict = {k:v[0] for k,v in self.gloss_dict.items()}
         self._prepare_llm(arg["llm"])
-        self._apply_lora()
+
+        if arg["apply_lora"]:
+            self._apply_lora()
 
         print("PROMPT:", self.prompt)
 
@@ -58,7 +66,7 @@ class EDM(nn.Module):
                 cache_dir="./data/models",
                 max_length=self.max_txt_len,
                 src_lang="en_XX",
-                tgt_lang="de_DE"
+                tgt_lang=self.bart_lang_heads[self.dataset],
             )
         else:
             config = T5Config.from_pretrained(model, cache_dir="./data/models")
@@ -82,22 +90,17 @@ class EDM(nn.Module):
         if self.include_pose:
             self.pose_encoder = PoseEncoder(cfg=self.pose_encoder_cfg)
 
-            w_path = "./ckpt/best.pth"
+            w_path = f"./ckpt/{self.dataset}.pth"
             weights = torch.load(w_path, map_location='cpu')["model"]
 
-            self.pose_encoder.load_state_dict(weights, strict=False)
+            msg = self.pose_encoder.load_state_dict(weights, strict=False)
+            print(f"Pose encoder weights loaded from {w_path}, msg: {msg}")
 
             for param in self.pose_encoder.parameters():
                 param.requires_grad = False
 
-
-            # self.pose_encoder = nn.Sequential(
-            #     nn.Linear(133*3, 512),
-            #     nn.GELU(),
-            #     nn.Linear(512, self.pose_hidden_size),
-            # )
-
-        self.temporal_encoder = TemporalConv(self.hidden_size, self.hidden_size, conv_type=2)
+        # self.temporal_encoder = TemporalConv(self.hidden_size, self.hidden_size, conv_type=2)
+        self.temporal_encoder = IMTM_CMTM(self.hidden_size, self.hidden_size, conv_type=2, num_heads=self.arg["num_heads"], num_layers=self.arg["num_layers"])
         self.logit_scale = nn.Parameter(torch.tensor(2.6592))
 
         if self.include_ctc:
@@ -105,27 +108,27 @@ class EDM(nn.Module):
             self.clf_mo = nn.Linear(self.hidden_size, self.num_classes) if self.include_mo else None
             self.clf_pose = nn.Linear(self.hidden_size, self.num_classes) if self.include_pose else None
 
-            # self.pre_llm_sp = nn.Sequential(
-            #     nn.Linear(self.num_classes, self.hidden_size),
-            #     nn.GELU(),
-            #     nn.Linear(self.hidden_size, self.hidden_size),
-            #     nn.GELU(),
-            #     nn.Linear(self.hidden_size, self.hidden_size),
-            # ) if self.include_sp else None
-            # self.pre_llm_mo = nn.Sequential(
-            #     nn.Linear(self.num_classes, self.hidden_size),
-            #     nn.GELU(),
-            #     nn.Linear(self.hidden_size, self.hidden_size),
-            #     nn.GELU(),
-            #     nn.Linear(self.hidden_size, self.hidden_size),
-            # ) if self.include_mo else None
-            # self.pre_llm_pose = nn.Sequential(
-            #     nn.Linear(self.num_classes, self.hidden_size),
-            #     nn.GELU(),
-            #     nn.Linear(self.hidden_size, self.hidden_size),
-            #     nn.GELU(),
-            #     nn.Linear(self.hidden_size, self.hidden_size),
-            # ) if self.include_pose else None
+            self.pre_llm_sp = nn.Sequential(
+                nn.Linear(self.num_classes, self.hidden_size),
+                nn.GELU(),
+                nn.Linear(self.hidden_size, self.hidden_size),
+                nn.GELU(),
+                nn.Linear(self.hidden_size, self.hidden_size),
+            ) if self.include_sp else None
+            self.pre_llm_mo = nn.Sequential(
+                nn.Linear(self.num_classes, self.hidden_size),
+                nn.GELU(),
+                nn.Linear(self.hidden_size, self.hidden_size),
+                nn.GELU(),
+                nn.Linear(self.hidden_size, self.hidden_size),
+            ) if self.include_mo else None
+            self.pre_llm_pose = nn.Sequential(
+                nn.Linear(self.num_classes, self.hidden_size),
+                nn.GELU(),
+                nn.Linear(self.hidden_size, self.hidden_size),
+                nn.GELU(),
+                nn.Linear(self.hidden_size, self.hidden_size),
+            ) if self.include_pose else None
 
             self.ctc_loss = torch.nn.CTCLoss(reduction='none', zero_infinity=False)
 
@@ -136,8 +139,12 @@ class EDM(nn.Module):
         print("All parameters are frozen for warmup.")
 
     def unfreeze_lora_parameters(self):
-        for name, param in self.llm.named_parameters():
-            if "lora" in name:
+        if self.arg["apply_lora"]:
+            for name, param in self.llm.named_parameters():
+                if "lora" in name:
+                    param.requires_grad = True
+        else:
+            for param in self.llm.parameters():
                 param.requires_grad = True
 
         print("LoRA parameters are unfrozen for training.")
@@ -196,7 +203,7 @@ class EDM(nn.Module):
 
 
     def _prepare_visual_input(self, sp_features, pose_features, mo_features, sp_lengths, pose_lengths, mo_lengths, glosses):
-        bs = sp_features.shape[0] if self.include_sp else pose_features.shape[0]
+        bs = sp_features.shape[0] if self.include_sp else mo_features.shape[0]
 
         if self.include_sp:
             sp_features = self.sp_proj(sp_features)
@@ -209,12 +216,6 @@ class EDM(nn.Module):
             pose_lengths = torch.tensor([pose_features.shape[1]]*pose_features.shape[0], dtype=torch.long, device=pose_features.device)
             pose_features = self.pose_proj(pose_features)
 
-            # pose_features = pose_features["keypoint"]
-            # B, C, T, K = pose_features.shape
-            # pose_features = pose_features.permute(0, 2, 1, 3).reshape(B, T, C*K)
-            # pose_features = self.pose_encoder(pose_features)
-            # pose_features = self.pose_proj(pose_features)
-
         slr_loss, mlp_sp, mlp_mo, mlp_pose = 0, 0, 0, 0
         if self.include_ctc:
             logits_sp = self.clf_sp(sp_features) if self.include_sp else None
@@ -226,7 +227,7 @@ class EDM(nn.Module):
                 gloss_labels = []
                 label_lengths = []
                 for gloss in glosses:
-                    label = [self.gloss_dict[g][0] for g in gloss]
+                    label = [self.gloss_dict[g] for g in gloss]
                     gloss_labels.extend(label)
                     label_lengths.append(len(label))
 
@@ -244,8 +245,6 @@ class EDM(nn.Module):
         joint_visual, visual_lengths = [], []
         for i in range(bs):
             parts = []
-
-            # parts.append(features[i, :sp_lengths[i]])
 
             if self.include_ctc:
                 if self.include_sp:
@@ -327,9 +326,10 @@ class EDM(nn.Module):
         sp_lengths, pose_lengths, mo_lengths,
         glosses, texts, icl_text, warmup=False
     ):
-        bs = sp_features.shape[0] if self.include_sp else pose_features.shape[0]
+        bs = sp_features.shape[0] if self.include_sp else mo_features.shape[0]
 
-        english_texts = [icl_text[i].split('=')[0] for i in range(bs)]
+        # english_texts = [icl_text[i].split('=')[0] for i in range(bs)]
+        english_texts = [icl_text[i].split('=')[-2].split("\n")[1] for i in range(bs)]
         icl_text = safe_derangement(icl_text)
         prompts = [
             f"{self.prompt}\n\nExamples:\n{icl_text[i]}" 
@@ -356,7 +356,18 @@ class EDM(nn.Module):
             output_tokens.input_ids == self.tokenizer.pad_token_id, -100
         )
 
+        if torch.isnan(visual_embeds).any():
+            # replace nan with zeros
+            for i in range(visual_embeds.size(0)):
+                if torch.isnan(visual_embeds[i]).any():
+                    visual_embeds[i] = torch.where(
+                        torch.isnan(visual_embeds[i]), 
+                        torch.zeros_like(visual_embeds[i]), 
+                        visual_embeds[i]
+                    )
+
         if self.training:
+            loss = 0
             if self.contrastive:
                 local_img, local_txt = self.prep_cont_tensors(visual_embeds, english_texts)
 
@@ -381,7 +392,7 @@ class EDM(nn.Module):
                     labels=targets,
                 )
                 loss += outputs.loss
-
+            
             return loss + slr_loss
 
         else:
@@ -392,6 +403,9 @@ class EDM(nn.Module):
                 max_length=self.max_txt_len,
                 do_sample=False
             )
+
+            if hasattr(generated, "sequences"):
+                generated = generated.sequences
 
             generated_strings = self.tokenizer.batch_decode(generated, skip_special_tokens=True)
             generated_strings = [gen.lower() for gen in generated_strings]

@@ -56,7 +56,10 @@ def setup_work_dir(arg, WORK_DIR_PATH):
     arg.llm_args["mo_hidden_size"] = arg.mo_hidden_size
     arg.llm_args["contrastive"] = arg.contrastive
     arg.llm_args["include_ctc"] = arg.include_ctc
+    arg.llm_args["dataset"] = arg.dataset
     arg.llm_args["gloss_dict"] = np.load(arg.dataset_info['dict_path'], allow_pickle=True).item()
+    arg.llm_args["num_heads"] = arg.temporal_args["num_heads"]
+    arg.llm_args["num_layers"] = arg.temporal_args["num_layers"]
     with open(arg.dataset_info["pose_encoder_config_path"], 'r') as f:
         arg.llm_args["pose_encoder_cfg"] = yaml.safe_load(f)["model"]["RecognitionNetwork"]
 
@@ -81,7 +84,7 @@ def setup_data(arg):
             os.path.join(arg.dataset_info["sp_path"], mode), 
             arg.dataset_info["pose_path"], 
             os.path.join(arg.dataset_info["mo_path"], mode), 
-            os.path.join(arg.dataset_info["phm_path"], mode), 
+            dataset=arg.dataset,
             mode=mode,
             include_sp=arg.include_sp,
             include_pose=arg.include_pose,
@@ -141,28 +144,28 @@ def main(arg, WORK_DIR_PATH):
     model.eval()
 
     for i, batch in enumerate(tqdm(test_loader)):
-        sp_features, pose_features, mo_features, glosses, texts, icl_text, sp_lengths, pose_lengths, mo_lengths = batch
+        sp_features, pose_features, rp_features, glosses, texts, icl_text, sp_lengths, pose_lengths, rp_lengths = batch
 
         sp_features = sp_features.to("cuda") if sp_features is not None else None
         if arg.include_pose:
             pose_features["keypoint"] = pose_features["keypoint"].to("cuda") if pose_features is not None else None
             pose_features["mask"] = pose_features["mask"].to("cuda") if pose_features is not None else None
-        mo_features = mo_features.to("cuda") if mo_features is not None else None
+        rp_features = rp_features.to("cuda") if rp_features is not None else None
         sp_lengths = sp_lengths.to("cuda") if sp_lengths is not None else None
         pose_lengths = pose_lengths.to("cuda") if pose_lengths is not None else None
-        mo_lengths = mo_lengths.to("cuda") if mo_lengths is not None else None
+        rp_lengths = rp_lengths.to("cuda") if rp_lengths is not None else None
 
         with torch.no_grad():
             gen_str, ref_str = model(
-                sp_features, pose_features, mo_features,
-                sp_lengths, pose_lengths, mo_lengths,
+                sp_features, pose_features, rp_features,
+                sp_lengths, pose_lengths, rp_lengths,
                 glosses, texts, icl_text, warmup=warmup
             )
         gen_strings.extend(gen_str)
         ref_strings.extend(ref_str)
 
     pred_logger("=" * 10 + f"Generated and Reference Strings" + "=" * 10)
-    for i in range(min(5, len(gen_strings))):
+    for i in range(len(gen_strings)):
         pred_logger(f"Generated: {gen_strings[i]}")
         pred_logger(f"Reference: {ref_strings[i]}")
         pred_logger("-" * 50)
@@ -197,5 +200,7 @@ if __name__ == '__main__':
 
     args.num_warmup_epochs = 0 if not args.contrastive else args.num_warmup_epochs
     assert args.include_sp or args.include_pose or args.include_mo, "At least one modality should be included."
+
+    print(args.dataset)
 
     main(args, WORK_DIR_PATH)

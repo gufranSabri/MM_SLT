@@ -7,7 +7,7 @@
 #SBATCH --mail-user=g202302610@kfupm.edu.sa
 #SBATCH --mail-type=ALL
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=l40s:4
+#SBATCH --gpus-per-node=h100:2
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=50G
 #SBATCH --time=1-00:00:00
@@ -21,8 +21,8 @@ bash ./scripts/install.sh
 
 # Timestamp for unique work directory
 timestamp=$(date +"%d_%H_%M_%S")
-work_dir="./work_dir/t5xl_m1_${timestamp}"
+work_dir="./work_dir/mt0_m13__${timestamp}"
 
 export PYTHONDONTWRITEBYTECODE=1
-python main_ddp.py --work-dir "$work_dir" --config ./configs/baseline_edm_ddp.yaml
-python test.py --work-dir "$work_dir" --config "$work_dir/baseline_edm_ddp.yaml"
+python main.py --work-dir "$work_dir" --config ./configs/baseline_edm.yaml
+python test.py --work-dir "$work_dir" --config "$work_dir/baseline_edm.yaml"

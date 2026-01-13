@@ -53,8 +53,6 @@ class T5(nn.Module):
         self.contrastive = arg["contrastive"]
         self.num_classes = len(self.gloss_dict) + 1
 
-        # login(token="token")
-
         self._prepare_llm(arg["llm"])
         self._apply_lora()
 
