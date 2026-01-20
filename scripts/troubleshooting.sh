@@ -8,5 +8,4 @@ pip install --no-index --upgrade pip && bash ./scripts/install.sh
 
 # ========================
 
-python main_slt.py --work-dir ./work_dir/test_slt --config ./configs/baseline_edm_slt.yaml
-python main_slr.py --work-dir ./work_dir/test_slr --config ./configs/baseline_edm_slr.yaml
+python main.py --work-dir ./work_dir/test --config ./configs/baseline_edm.yaml

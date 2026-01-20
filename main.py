@@ -86,7 +86,7 @@ def setup_work_dir(arg, is_main, WORK_DIR_PATH):
 
     ft_dataset = import_class(arg.feeder_ft)
     shutil.copy2(inspect.getfile(ft_dataset), WORK_DIR_PATH)
-    shutil.copy2("./main_slt.py", WORK_DIR_PATH)
+    shutil.copy2("./main.py", WORK_DIR_PATH)
 
     return arg
 
@@ -349,7 +349,7 @@ if __name__ == '__main__':
         shutil.copy2(p.config, WORK_DIR_PATH)
         shutil.copy2(f"./configs/{args.dataset}.yaml", WORK_DIR_PATH)
         shutil.copy2(f"./modules/pose_encoder/model.py", WORK_DIR_PATH)
-        shutil.copy2(f"./modules/sf_temporal.py", WORK_DIR_PATH)
+        shutil.copy2(f"./modules/ff.py", WORK_DIR_PATH)
 
     world_size = torch.cuda.device_count()
     torch.multiprocessing.spawn(main, args=(world_size, args, WORK_DIR_PATH), nprocs=world_size, join=True)

@@ -10,7 +10,7 @@
 #SBATCH --gpus-per-node=h100:2
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=50G
-#SBATCH --time=1-00:00:00
+#SBATCH --time=12:00:00
 
 module load python/3.11.5 cuda/12.2 gcc arrow
 virtualenv --no-download $SLURM_TMPDIR/env

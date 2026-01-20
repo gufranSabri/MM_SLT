@@ -5,10 +5,8 @@ import torch.nn.functional as F
 from modules.tconv import TemporalConv
 from modules.ff import IMTM_CMTM
 from modules.pose_encoder.model import PoseEncoder
-from modules.gating import GatedFusion
 from torch.distributed.nn.functional import all_gather
 from utils.helpers import safe_derangement, clip_loss
-
 
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoTokenizer, T5ForConditionalGeneration, T5Config
